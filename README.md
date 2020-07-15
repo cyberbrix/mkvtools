@@ -20,4 +20,4 @@ mediainfo - https://mediaarea.net/en/MediaInfo
 Note: The code isn't perfect and always improving. If you have input, please let me know here.
 
 ## Examples
-
+coming soon
