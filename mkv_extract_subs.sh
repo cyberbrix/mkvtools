@@ -192,7 +192,7 @@ do
     mv "$filename" "$filename.orig"
     mv "$filepath/tmp.mkv" "$filename"
     # Delete original file
-    rm "$filepath/filename.orig"
+    rm "$filename.orig"
 
     # sorts through each file extension. 
     for i in $(find "$filepath" -type f -not -name "*.mkv" -name "$filebasename.*"| sed 's|.*\.||' | sort -u)
