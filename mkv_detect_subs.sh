@@ -83,6 +83,7 @@ do
   if [ $cccheckfail -eq 0 ]
   then
     ffprobe -hide_banner -select_streams v "$filename" 2>&1 | grep -q "Closed Captions" && ccsubcount=1
+    #ffprobe -hide_banner -select_streams v "$filename" 2>&1 | grep -q "Closed Captions" || ffprobe -hide_banner -f lavfi -i movie="$filename"[out+subcc] 2>&1 | grep -q "eia_608"  && ccsubcount=1
   fi
 
   # Find out which tracks contain the subtitles

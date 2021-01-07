@@ -127,7 +127,7 @@ do
     subfilezize=`stat -c%s "$filepath/$filebasename.$ext.tmp"`
 
     # English words used to identify language
-    langtest=`grep -icE ' you | the | and | that ' "$filepath/$filebasename".$ext.tmp`
+    langtest=`grep -icE ' you | with | and | that ' "$filepath/$filebasename".$ext.tmp`
 
     # Check if subtitle passes our language filter (10 or more matches)
     if [ $langtest -ge 10 ]
@@ -215,6 +215,7 @@ do
 
   # check for CC
   if (ffprobe -hide_banner -select_streams v "$filename" 2>&1 | grep -q "Closed Captions")
+  # if ffprobe -hide_banner -select_streams v "$filename" 2>&1 | grep -q "Closed Captions" || ffprobe -hide_banner -f lavfi -i movie="$filename"[out+subcc] 2>&1 | grep -q "eia_608"
     then
        if [ ! -z "$ffmpegcheck" ]
        then
