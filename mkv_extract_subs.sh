@@ -58,10 +58,13 @@ fi
 # Establish variables and arrays
 
 # Regex for mkvmerge output
-mkvsubregex='Track ID ([0-9]{1,2}): subtitles \((.*)\)'
+#mkvsubregex='Track ID ([0-9]{1,2}): subtitles \((.*)\)'
+# Regex for ffprobe mkvmerge output
+#mkvsubregex=' +?Stream #[0-9]:([0-9]{1,2})\((.*)\): Subtitle: (.*)'
+mkvsubregex=' +?Stream #[0-9]:([0-9]{1,2})(\((.*)\))?: Subtitle: ([^[:space:]]+)'
 
 # Array for subtitle types
-declare -A subtypes=( [SubRip/SRT]="srt" [SubStationAlpha]="ssa" [HDMV PGS]="sup" [WebVTT]="webvtt")
+declare -A subtypes=(  [subrip]="srt" [ass]="ass" [WebVTT]="vtt" [hdmv_pgs_subtitle]="sup" )
 
 # Get all the MKV files in this dir and its subdirs
 find "$DIR" -type f -name '*.mkv' -print0 | while IFS= read -r -d '' filename
@@ -76,8 +79,8 @@ do
 
   #echo "processing $filename"
   # Get basename for subtitle
-  filebasename=` basename "${filename%.*}"`
-  filepath=`dirname "${filename}"`
+  filebasename=$(basename "${filename%.*}")
+  filepath=$(dirname "${filename}")
   
   # Reset subtitle count
   subcount=0  
@@ -85,24 +88,69 @@ do
   # Reset vobsubcount  
   vobsubcount=0
 
+  # Reset Unknown/Error Count
+  unknowncount=0
+
   # Reset sub tracks for removal
-  removesubtrack=""
+  #removesubtrack=""
 
   # Find out which tracks contain the subtitles
-  while read subline  
+  while read -r subline
   do
     ((subcount++))
-    
-    # Regex the number of the subtitle track and sub type
-    [[ $subline =~ $mkvsubregex ]]
-    tracknumber="${BASH_REMATCH[1]}"
-    trackformat="${BASH_REMATCH[2]}"    
 
-    # dealing with idx/sub/sup files.
-    #if [ "$trackformat" = "VobSub" ]
-    if [[ "$trackformat" == "VobSub" ]]
+    # Regex the number of the subtitle track and sub type
+    if [[ $subline =~ $mkvsubregex ]]
+#    tracknumber="${BASH_REMATCH[1]}"
+#    trackformat="${BASH_REMATCH[2]}"
+
+    # ffprobe Regex the track info
     then
-      mkvextract -q tracks "$filename" $tracknumber:"$filepath/$filebasename-$tracknumber"
+      tracknumber="${BASH_REMATCH[1]}"
+      tracklanguage="${BASH_REMATCH[3]}"
+      trackformat="${BASH_REMATCH[4]}"
+      trackextra="${BASH_REMATCH[5]}"
+    else
+      ((unknowncount++))
+      ((subcount--))
+      continue
+    fi
+
+    # Check if accepted language
+    # eng - English
+    # en - English
+    # mul - multiple languages
+    # und - unknown
+
+    declare -a AllowedLang=("eng" "en" "mul" "und")
+
+    # Set blank language as undetermined
+    if [ -z "$tracklanguage" ]
+    then
+      tracklanguage="und"
+    fi
+
+
+    # Skip if not acceptable language
+    if [[ ${AllowedLang[*]} =~ (^|[[:space:]])"$tracklanguage"($|[[:space:]]) ]]
+    then
+      :
+    else
+      ((subcount--))
+      continue
+    fi
+
+   # check if forced track
+    if [ "${trackextra,,}" = "*forced*" ]
+    then
+      trackforced=1
+    fi
+    # dealing with idx/sub/sup files.
+    if [[ "$trackformat" == dvd_subtitle* ]]
+    #if [[ "$trackformat" == "VobSub" ]]
+    then
+      # mkvextract removes the file extension, so adding it back to compensate.
+      mkvextract -q tracks "$filename" $tracknumber:"$filepath/$filebasename-$tracknumber.mkv"
       if [ ! -f "$filepath/$filebasename.sub" ] && [ ! -f "$filepath/$filebasename.idx" ]
       then
         mv "$filepath/$filebasename-$tracknumber.sub" "$filepath/$filebasename.sub"
@@ -117,58 +165,104 @@ do
       ((subcount--))
       continue
     fi
+    if [[ "$trackformat" == "hdmv_pgs_subtitle," ]]
+    then
+      mkvextract -q tracks "$filename" $tracknumber:"$filepath/$filebasename-$tracknumber.sup"
 
-    ext="${subtypes[$trackformat]}"    
-    
+      # count sup not as subs
+      ((vobsubcount++))
+      ((subcount--))
+      continue
+    fi
+
+    ext="${subtypes[$trackformat]}"
+
     # Extract track to .tmp file
     mkvextract -q tracks "$filename" $tracknumber:"$filepath/$filebasename.$ext.tmp"
 
     # Get file size
-    subfilezize=`stat -c%s "$filepath/$filebasename.$ext.tmp"`
+    subfilesize=$(stat -c%s "$filepath/$filebasename.$ext.tmp")
 
-    # English words used to identify language
-    langtest=`grep -icE ' you | with | and | that ' "$filepath/$filebasename".$ext.tmp`
+    # If unknown language test English words. Sets eng or en as passing English test
+    if [[ "$tracklanguage" == "und" || "$tracklanguage" == "mul"  ]]
+    then
+      TotalWords=$(wc -w < "$filepath/$filebasename".$ext.tmp)
+      EnglishCommonWords=$(grep -Eo -i '\b(the|and|is|in|to|of|that|it|for|on|with|as|at|by|from|this|be|or|an)\b' "$filepath/$filebasename".$ext.tmp | wc -l)
+      EnglishPercent=$(( 100 * EnglishCommonWords / (TotalWords == 0 ? 1 : TotalWords) ))
+      langtest=$(grep -icE ' you | with | and | that ' "$filepath/$filebasename".$ext.tmp)
+    else
+      langtest=11
+      EnglishPercent=50
+    fi
 
     # Check if subtitle passes our language filter (10 or more matches)
-    if [ $langtest -ge 10 ]
+    #if [ $langtest -ge 10 ]
+    #echo "$filepath/$filebasename.$ext.tmp Stopwords: $EnglishCommonWords / $TotalWords words = $EnglishPercent%"
+
+    if [ $EnglishPercent -ge 10 ]
     then
       fileext="en.$ext"
 
       # Add checking for SDH - will not always detect properly in not srt files
-      sdhtest=`grep -icE '[[({].*?[])}]' "$filepath/$filebasename".$ext.tmp`
-      if [ $sdhtest -ge 10 ]
+      sdhtest=$(grep -icE '[[(].*?[])]' "$filepath/$filebasename".$ext.tmp)
+	  if [ $sdhtest -ge 10 ]
       then
         fileext="en.sdh.$ext"
       fi
 
       # check if under 10KB, likely indicator of forced subs
-      if [ $subfilezize -le 10240 ]
+      if [[ $subfilesize -le 10240 || $trackforced -eq 1  ]]
       then
         fileext="en.forced.$ext"
       fi
 
       # Confirm english sub doesn't exist. add track number if it does
-      if [ -f "$filepath/$filebasename.$fileext" ]      
+      if [ -f "$filepath/$filebasename.$fileext" ]
       then
         fileext="$tracknumber.en.$ext"
       fi
     else
       # Not English. Add a number to the filename
-      fileext="$tracknumber.$ext" 
+      fileext="$tracknumber.und.$ext"
     fi
-    
+
     #Insert command to rename file to determined file name
     mv "$filepath/$filebasename.$ext.tmp" "$filepath/$filebasename.$fileext"
-    
+
+    # Convert SSA to srt if ffmpeg installed
+    if [[ "$trackformat" == "ass" ]] && [ -z "$ffmpegcheck" ]
+    then
+      # find new file ext, update variables
+      oldfileext=$fileext
+      fileext=${oldfileext//ass/srt}
+      ext="srt"
+      
+	  # Confirm english sub doesn't exist. add track number if it does
+      if [ -f "$filepath/$filebasename.$fileext" ]
+      then
+        fileext="$tracknumber.$fileext"
+      fi
+	  
+	  # convert ssa to srt
+      ffmpeg -nostdin -hide_banner -loglevel warning -abort_on empty_output -i "$filepath/$filebasename.$oldfileext" -codec:s text "$filepath/$filebasename.$fileext"
+      # if no errors, delete the ssa
+      if [ $? -eq 0 ]
+      then
+        rm "$filepath/$filebasename.$oldfileext"
+      else
+        rm "$filepath/$filebasename.$fileext"
+      fi
+    fi
+
     # Identify as image based, not text
-    if [[ "$trackformat" == "HDMV PGS" ]]
+    if [[ "$trackformat" == "hdmv_pgs_subtitle" ]]
     then
       ((vobsubcount++))
       ((subcount--))
     fi
+ done < <(ffprobe "$filename" |& grep Stream | grep -i 'subtitle')
 
-  done < <(mkvmerge -i "$filename" | grep 'subtitles')
-  
+
   # Processing if subs are found
   if [[ $subcount -gt 0  ||  $vobsubcount -gt 0 ]]
   then
@@ -207,7 +301,7 @@ do
 
 
   # Continue if ffprobe missing
-  if [ ! -z "$ffprobecheck" ]
+  if [ -n "$ffprobecheck" ]
   then
     echo "failed probe check"
     continue
@@ -215,20 +309,20 @@ do
 
   # check for CC
   if (ffprobe -hide_banner -select_streams v "$filename" 2>&1 | grep -q "Closed Captions")
-  # if ffprobe -hide_banner -select_streams v "$filename" 2>&1 | grep -q "Closed Captions" || ffprobe -hide_banner -f lavfi -i movie="$filename"[out+subcc] 2>&1 | grep -q "eia_608"
     then
-       if [ ! -z "$ffmpegcheck" ]
+       if [ -n "$ffmpegcheck" ]
        then
          echo "$filename - ffmpeg not installed, closed captions not extracted."
          continue
        fi
-       ffmpeg -nostdin -hide_banner -loglevel warning -f lavfi -i "movie=$filename[out0+subcc]" -map s "$filepath/$filebasename.cc.srt"
+      ffmpeg -nostdin -hide_banner -loglevel quiet -f lavfi -i "movie=$filepath/$filebasename.mkv[out0+subcc]" -map s "$filepath/$filebasename.cc.srt" 
+      #ffmpeg -nostdin -hide_banner -loglevel warning -f lavfi -i "movie=$filename[out0+subcc]" -map s "$filepath/$filebasename.cc.srt"
       if [ $? -ne 0 ]
       then
         echo "$filename - ffmpeg had an issue extracting closed captions."
         continue
       fi
-    if [ ! -z "$ffmpegfiltercheck" ]
+    if [ -n "$ffmpegfiltercheck" ]
     then
       echo "$filename - ffmpeg missing 'filter_units' bitstream filter. Check version. CC remain in file."
       continue
