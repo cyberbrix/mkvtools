@@ -189,9 +189,9 @@ do
       TotalWords=$(wc -w < "$filepath/$filebasename".$ext.tmp)
       EnglishCommonWords=$(grep -Eo -i '\b(the|and|is|in|to|of|that|it|for|on|with|as|at|by|from|this|be|or|an)\b' "$filepath/$filebasename".$ext.tmp | wc -l)
       EnglishPercent=$(( 100 * EnglishCommonWords / (TotalWords == 0 ? 1 : TotalWords) ))
-      langtest=$(grep -icE ' you | with | and | that ' "$filepath/$filebasename".$ext.tmp)
+      #langtest=$(grep -icE ' you | with | and | that ' "$filepath/$filebasename".$ext.tmp)
     else
-      langtest=11
+      #langtest=11
       EnglishPercent=50
     fi
 
@@ -243,7 +243,7 @@ do
         fileext="$tracknumber.$fileext"
       fi
 	  
-	  # convert ssa to srt
+      # convert ssa to srt
       ffmpeg -nostdin -hide_banner -loglevel warning -abort_on empty_output -i "$filepath/$filebasename.$oldfileext" -codec:s text "$filepath/$filebasename.$fileext"
       # if no errors, delete the ssa
       if [ $? -eq 0 ]
@@ -345,4 +345,32 @@ do
     fi
   fi
 
+  # Cleaning up non-English SRT files, if English ones exist
+  shopt -s nullglob
+  # Collect candidate .srt files that contain .en. in the right position
+  
+  # CountMatches=(${filebasename}*.en.*.srt)
+  CountMatches="$(find "$filepath" -maxdepth 1 -type f -name "${filebasename}*.en*.srt" -print -quit)"
+
+  if [ -n "$CountMatches" ]
+  then
+    find "$filepath" -maxdepth 1 -type f -name "${filebasename}"'*.srt' -print0 | while IFS= read -r -d '' f
+    do
+      fname=$(basename "$f")
+
+      # Escape basename for regex safety
+      escaped_base=$(printf '%s\n' "$filebasename" | sed 's/[.[\*^$()+?{|]/\\&/g')
+
+      if [[ "$fname" =~ ^${escaped_base}\.en(\.sdh)?\.srt$ ]]
+      then
+        :
+      else
+        echo "Deleting: $f"
+        rm -- "$f"
+      fi
+    done
+  fi
+
+  # unsets shopt to be certain
+  shopt -u nullglob
 done
